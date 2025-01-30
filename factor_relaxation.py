@@ -13,15 +13,15 @@ import ot
 
 
 def initialize_couplings(
-    a: np.array, b: np.array, r: int, seed=42
+    a: np.array, b: np.array, r: int, reg=1e-3, seed=42
 ) -> tuple[np.array, np.array, np.array]:
     n = a.shape[0]
     m = b.shape[0]
-    r = g_Q.shape[0]
 
-    C_Q = np.random.uniform(size=(n, r), seed=seed)
-    C_R = np.random.uniform(size=(m, r), seed=seed)
-    C_T = np.random.uniform(size=(r, r), seed=seed)
+    np.random.seed(seed)
+    C_Q = np.random.uniform(size=(n, r))
+    C_R = np.random.uniform(size=(m, r))
+    C_T = np.random.uniform(size=(r, r))
 
     K_Q = np.exp(C_Q)
     K_R = np.exp(C_R)
@@ -29,8 +29,8 @@ def initialize_couplings(
 
     g_Q, g_R = np.full(r, 1 / r), np.full(r, 1 / r)  # Shape (r,) and (r,)
 
-    Q = ot.sinkhorn(a, g_Q, K_Q)
-    R = ot.sinkhorn(b, g_R, K_R)
+    Q = ot.sinkhorn(a, g_Q, K_Q, reg)
+    R = ot.sinkhorn(b, g_R, K_R, reg)
     T = ot.sinkhorn(
         Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), g_R, K_T
     )
@@ -42,7 +42,9 @@ def compute_gradient_Q(C, Q, R, X, g_Q):
     n = Q.shape[0]
 
     term1 = C @ R @ X.T
-    term2 = np.ones(n, dtype=float) @ np.diag(np.diag(1 / g_Q) @ Q.T @ term1)
+    term2 = np.ones((n, 1), dtype=float) @ (
+        np.diag(term1.T @ Q @ np.diag(1 / g_Q)).reshape(1, -1)
+    )
     grad_Q = term1 - term2
 
     return grad_Q
@@ -52,7 +54,9 @@ def compute_gradient_R(C, Q, R, X, g_R):
     m = R.shape[0]
 
     term1 = C.T @ Q @ X
-    term2 = np.ones(m, dtype=float) @ np.diag(term1.T @ R @ np.diag(1 / g_R))
+    term2 = np.ones((m, 1), dtype=float) @ (
+        np.diag(np.diag(1 / g_R) @ R.T @ term1).reshape(1, -1)
+    )
     grad_R = term1 - term2
 
     return grad_R
@@ -72,13 +76,13 @@ def solve_semi_relaxed_projection(K, gamma, tau, a, b, delta, max_iter=100):
     n, r = K.shape
     u = np.ones(n, dtype=float)
     v = np.ones(r, dtype=float)
-    for _ in max_iter:
+    for _ in range(max_iter):
         u_prime = u
         v_prime = v
         u = a / (K @ v)
-        v = np.pow((b / (K.T @ u)), tau / (tau + 1 / gamma))
+        v = np.power((b / (K.T @ u)), tau / (tau + 1 / gamma))
         if (
-            np.max(
+            max(
                 np.max(np.abs(np.log(u) - np.log(u_prime))),
                 np.max(np.abs(np.log(v) - np.log(v_prime))),
             )
@@ -139,14 +143,14 @@ def solve_balanced_FRLC(
     )  # Shape (n,) and (m,)
     Q, R, T = initialize_couplings(a, b, r)  # Shape (n,r), (m,r), (r,r)
     X = np.diag(1 / (Q.T @ ones_n)) @ T @ np.diag(1 / (R.T @ ones_m))  # Shape (r,r)
-    g_Q = np.dot(Q_new.T, ones_n)
-    g_R = np.dot(R_new.T, ones_m)
+    g_Q = np.dot(Q.T, ones_n)
+    g_R = np.dot(R.T, ones_m)
 
     for _ in range(max_iter):
         grad_Q = compute_gradient_Q(C, Q, R, X, g_Q)  # Shape (n,r)
         grad_R = compute_gradient_R(C, Q, R, X, g_R)  # Shape (m,r)
 
-        gamma_k = gamma / np.max(
+        gamma_k = gamma / max(
             np.linalg.norm(grad_Q, ord=np.inf), np.linalg.norm(grad_R, ord=np.inf)
         )  # l-inf normalization of Scetbon & Cuturi 2021
 
