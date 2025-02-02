@@ -13,7 +13,7 @@ import ot
 
 
 def initialize_couplings(
-    a: np.array, b: np.array, r: int, reg=1e-3, seed=42
+    a: np.array, b: np.array, r: int, reg_init=1e-3, seed=42
 ) -> tuple[np.array, np.array, np.array]:
     n = a.shape[0]
     m = b.shape[0]
@@ -23,16 +23,12 @@ def initialize_couplings(
     C_R = np.random.uniform(size=(m, r))
     C_T = np.random.uniform(size=(r, r))
 
-    K_Q = np.exp(C_Q)
-    K_R = np.exp(C_R)
-    K_T = np.exp(C_T)
-
     g_Q, g_R = np.full(r, 1 / r), np.full(r, 1 / r)  # Shape (r,) and (r,)
 
-    Q = ot.sinkhorn(a, g_Q, K_Q, reg)
-    R = ot.sinkhorn(b, g_R, K_R, reg)
+    Q = ot.sinkhorn(a, g_Q, C_Q, reg_init)
+    R = ot.sinkhorn(b, g_R, C_R, reg_init)
     T = ot.sinkhorn(
-        Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), g_R, K_T
+        Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), C_T, reg_init
     )
 
     return Q, R, T
@@ -41,9 +37,9 @@ def initialize_couplings(
 def compute_gradient_Q(C, Q, R, X, g_Q):
     n = Q.shape[0]
 
-    term1 = C @ R @ X.T
+    term1 = (C @ R) @ X.T  # parantheses for faster multiplication order
     term2 = np.ones((n, 1), dtype=float) @ (
-        np.diag(term1.T @ Q @ np.diag(1 / g_Q)).reshape(1, -1)
+        np.diag((term1.T @ Q) @ np.diag(1 / g_Q)).reshape(1, -1)
     )
     grad_Q = term1 - term2
 
@@ -53,9 +49,9 @@ def compute_gradient_Q(C, Q, R, X, g_Q):
 def compute_gradient_R(C, Q, R, X, g_R):
     m = R.shape[0]
 
-    term1 = C.T @ Q @ X
+    term1 = (C.T @ Q) @ X
     term2 = np.ones((m, 1), dtype=float) @ (
-        np.diag(np.diag(1 / g_R) @ R.T @ term1).reshape(1, -1)
+        np.diag(np.diag(1 / g_R) @ (R.T @ term1)).reshape(1, -1)
     )
     grad_R = term1 - term2
 
@@ -72,6 +68,7 @@ def compute_distance(Q_new, R_new, T_new, Q, R, T):
     )
 
 
+# the bug is here (numerical stability)
 def solve_semi_relaxed_projection(K, gamma, tau, a, b, delta, max_iter=100):
     n, r = K.shape
     u = np.ones(n, dtype=float)
@@ -151,18 +148,18 @@ def solve_balanced_FRLC(
         grad_R = compute_gradient_R(C, Q, R, X, g_R)  # Shape (m,r)
 
         gamma_k = gamma / max(
-            np.linalg.norm(grad_Q, ord=np.inf), np.linalg.norm(grad_R, ord=np.inf)
-        )  # l-inf normalization of Scetbon & Cuturi 2021
+            np.max(np.abs(grad_Q)), np.max(np.abs(grad_R))
+        )  # l-inf normalization
 
         K_Q = Q * np.exp(-gamma_k * grad_Q)  #  Shape (n,r)
         K_R = R * np.exp(-gamma_k * grad_R)  #  Shape (m,r)
 
         Q_new = solve_semi_relaxed_projection(
-            K_Q, gamma_k, tau, a, np.dot(Q.T, ones_n), delta
+            K_Q, gamma_k, tau, a, g_Q, delta
         )  # Shape (n, r)
 
         R_new = solve_semi_relaxed_projection(
-            K_R, gamma_k, tau, b, np.dot(R.T, ones_m), delta
+            K_R, gamma_k, tau, b, g_R, delta
         )  # Shape (m, r)
 
         g_Q = np.dot(Q_new.T, ones_n)
@@ -170,7 +167,7 @@ def solve_balanced_FRLC(
 
         grad_T = compute_gradient_T(Q_new, R_new, C, g_Q, g_R)  # Shape (r, r)
 
-        gamma_T = gamma / np.linalg.norm(grad_T, ord=np.inf)
+        gamma_T = gamma / np.max(np.abs(grad_T))
 
         K_T = T * np.exp(-gamma_T * grad_T)  # Shape (r,r)
 
