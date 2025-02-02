@@ -13,7 +13,7 @@ import ot
 
 
 def initialize_couplings(
-    a: np.array, b: np.array, r: int, reg_init=1e-3, seed=42
+    a: np.array, b: np.array, r: int, reg_init=1, seed=42
 ) -> tuple[np.array, np.array, np.array]:
     n = a.shape[0]
     m = b.shape[0]
@@ -68,6 +68,7 @@ def compute_distance(Q_new, R_new, T_new, Q, R, T):
     )
 
 
+"""
 # the bug is here (numerical stability)
 def solve_semi_relaxed_projection(K, gamma, tau, a, b, delta, max_iter=100):
     n, r = K.shape
@@ -86,6 +87,7 @@ def solve_semi_relaxed_projection(K, gamma, tau, a, b, delta, max_iter=100):
             < delta * gamma
         ):
             return np.diag(u) @ K @ np.diag(v)
+"""
 
 
 def solve_balanced_FRLC(
@@ -151,16 +153,13 @@ def solve_balanced_FRLC(
             np.max(np.abs(grad_Q)), np.max(np.abs(grad_R))
         )  # l-inf normalization
 
-        K_Q = Q * np.exp(-gamma_k * grad_Q)  #  Shape (n,r)
-        K_R = R * np.exp(-gamma_k * grad_R)  #  Shape (m,r)
+        Q_new = ot.sinkhorn_unbalanced(
+            a=a, b=g_Q, M=grad_Q, reg=1 / gamma_k, reg_m=[float("inf"), tau]
+        )
 
-        Q_new = solve_semi_relaxed_projection(
-            K_Q, gamma_k, tau, a, g_Q, delta
-        )  # Shape (n, r)
-
-        R_new = solve_semi_relaxed_projection(
-            K_R, gamma_k, tau, b, g_R, delta
-        )  # Shape (m, r)
+        R_new = ot.sinkhorn_unbalanced(
+            a=a, b=g_Q, M=grad_R, reg=1 / gamma_k, reg_m=[tau, float("inf")]
+        )
 
         g_Q = np.dot(Q_new.T, ones_n)
         g_R = np.dot(R_new.T, ones_m)
@@ -169,9 +168,7 @@ def solve_balanced_FRLC(
 
         gamma_T = gamma / np.max(np.abs(grad_T))
 
-        K_T = T * np.exp(-gamma_T * grad_T)  # Shape (r,r)
-
-        T_new = ot.sinkhorn(g_R, g_Q, K_T, reg=delta)  # Shape (r, r)
+        T_new = ot.sinkhorn(g_R, g_Q, grad_T, reg=1 / gamma_T)  # Shape (r, r)
 
         X_new = np.diag(1 / g_Q) @ T_new @ np.diag(1 / g_R)  # Shape (r, r)
 
