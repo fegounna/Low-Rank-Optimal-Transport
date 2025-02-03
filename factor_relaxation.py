@@ -158,7 +158,7 @@ def solve_balanced_FRLC(
         )
 
         R_new = ot.sinkhorn_unbalanced(
-            a=a, b=g_Q, M=grad_R, reg=1 / gamma_k, reg_m=[tau, float("inf")]
+            a=b, b=g_R, M=grad_R, reg=1 / gamma_k, reg_m=[float("inf"), tau]
         )
 
         g_Q = Q_new.T @ ones_n
