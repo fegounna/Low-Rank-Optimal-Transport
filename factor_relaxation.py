@@ -142,8 +142,8 @@ def solve_balanced_FRLC(
     )  # Shape (n,) and (m,)
     Q, R, T = initialize_couplings(a, b, r)  # Shape (n,r), (m,r), (r,r)
     X = np.diag(1 / (Q.T @ ones_n)) @ T @ np.diag(1 / (R.T @ ones_m))  # Shape (r,r)
-    g_Q = np.dot(Q.T, ones_n)
-    g_R = np.dot(R.T, ones_m)
+    g_Q = Q.T @ ones_n
+    g_R = R.T @ ones_m
 
     for _ in range(max_iter):
         grad_Q = compute_gradient_Q(C, Q, R, X, g_Q)  # Shape (n,r)
@@ -161,8 +161,8 @@ def solve_balanced_FRLC(
             a=a, b=g_Q, M=grad_R, reg=1 / gamma_k, reg_m=[tau, float("inf")]
         )
 
-        g_Q = np.dot(Q_new.T, ones_n)
-        g_R = np.dot(R_new.T, ones_m)
+        g_Q = Q_new.T @ ones_n
+        g_R = R_new.T @ ones_m
 
         grad_T = compute_gradient_T(Q_new, R_new, C, g_Q, g_R)  # Shape (r, r)
 
