@@ -13,7 +13,7 @@ import ot
 
 
 def initialize_couplings(
-    a: np.array, b: np.array, r: int, reg_init=1, seed=42
+    a: np.array, b: np.array, r: int, reg_init=1e-1, seed=42
 ) -> tuple[np.array, np.array, np.array]:
     n = a.shape[0]
     m = b.shape[0]
@@ -25,10 +25,10 @@ def initialize_couplings(
 
     g_Q, g_R = np.full(r, 1 / r), np.full(r, 1 / r)  # Shape (r,) and (r,)
 
-    Q = ot.sinkhorn(a, g_Q, C_Q, reg_init)
-    R = ot.sinkhorn(b, g_R, C_R, reg_init)
+    Q = ot.sinkhorn(a, g_Q, C_Q, reg_init, numItermax=10000)
+    R = ot.sinkhorn(b, g_R, C_R, reg_init, numItermax=10000)
     T = ot.sinkhorn(
-        Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), C_T, reg_init
+        Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), C_T, reg_init, numItermax=10000
     )
 
     return Q, R, T
@@ -144,8 +144,11 @@ def solve_balanced_FRLC(
     X = np.diag(1 / (Q.T @ ones_n)) @ T @ np.diag(1 / (R.T @ ones_m))  # Shape (r,r)
     g_Q = Q.T @ ones_n
     g_R = R.T @ ones_m
+    loss_list=[]
+    sign_of_convergence=0
+    print("#############")
 
-    for _ in range(max_iter):
+    for it in range(max_iter):
         grad_Q = compute_gradient_Q(C, Q, R, X, g_Q)  # Shape (n,r)
         grad_R = compute_gradient_R(C, Q, R, X, g_R)  # Shape (m,r)
 
@@ -168,11 +171,21 @@ def solve_balanced_FRLC(
 
         gamma_T = gamma / np.max(np.abs(grad_T))
 
-        T_new = ot.sinkhorn(g_R, g_Q, grad_T, reg=1 / gamma_T)  # Shape (r, r)
+        T_new = ot.sinkhorn(g_R, g_Q, grad_T, reg=1 / gamma_T+delta)  # Shape (r, r)
 
         X_new = np.diag(1 / g_Q) @ T_new @ np.diag(1 / g_R)  # Shape (r, r)
 
         if compute_distance(Q_new, R_new, T_new, Q, R, T) < gamma_k * gamma_k * epsilon:
-            return Q_new @ X_new @ R_new.T  # Shape (n, m)
+            sign_of_convergence+=1
+        else:
+            sign_of_convergence=0
+        
+        if sign_of_convergence>=5:
+            return Q_new @ X_new @ R_new.T, loss_list  # Shape (n, m)
 
         Q, R, T, X = Q_new, R_new, T_new, X_new
+        
+        loss = np.sum((Q_new @ X_new @ R_new.T) * C)
+        loss_list.append(loss)
+    
+    return Q_new @ X_new @ R_new.T, loss_list
