@@ -151,6 +151,7 @@ delta = 10 # sert à rien
 epsilon = 1e-20
 max_iter = 200
 
+
 transport_matrix_frlc, loss_liste = fr.solve_balanced_FRLC(
     C=cost_matrix, 
     r=r, 

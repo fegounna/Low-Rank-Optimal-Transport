@@ -67,6 +67,8 @@ def compute_distance(Q_new, R_new, T_new, Q, R, T):
         np.sum((Q_new - Q) ** 2) + np.sum((R_new - R) ** 2) + np.sum((T_new - T) ** 2)
     )
 
+def test_save_update():
+    print("C'est good")
 
 """
 # the bug is here (numerical stability)
@@ -148,6 +150,8 @@ def solve_balanced_FRLC(
     sign_of_convergence=0
     print("#############")
 
+    print('Nouvelle version')
+
     for it in range(max_iter):
         grad_Q = compute_gradient_Q(C, Q, R, X, g_Q)  # Shape (n,r)
         grad_R = compute_gradient_R(C, Q, R, X, g_R)  # Shape (m,r)
@@ -157,11 +161,13 @@ def solve_balanced_FRLC(
         )  # l-inf normalization
 
         Q_new = ot.sinkhorn_unbalanced(
-            a=a, b=g_Q, M=grad_Q, reg=1 / gamma_k, reg_m=[float("inf"), tau]
+            a=a, b=g_Q, M=grad_Q, reg=1 / gamma_k, reg_m=[float("inf"), tau], c=Q
         )
 
+
+
         R_new = ot.sinkhorn_unbalanced(
-            a=b, b=g_R, M=grad_R, reg=1 / gamma_k, reg_m=[float("inf"), tau]
+            a=b, b=g_R, M=grad_R, reg=1 / gamma_k, reg_m=[float("inf"), tau], c=R
         )
 
         g_Q = Q_new.T @ ones_n
@@ -189,3 +195,192 @@ def solve_balanced_FRLC(
         loss_list.append(loss)
     
     return Q_new @ X_new @ R_new.T, loss_list
+
+
+# -----------------------------------------------------------------------------------------------------------
+
+
+def initialize_couplings_2(
+    a: np.array, b: np.array, r: int, reg_init=1e-1, seed=42
+) -> tuple[np.array, np.array, np.array]:
+    
+    # ajout de l'exponentiel
+
+    n = a.shape[0]
+    m = b.shape[0]
+
+    np.random.seed(seed)
+    C_Q = np.exp(np.random.uniform(size=(n, r)))
+    C_R = np.exp(np.random.uniform(size=(m, r)))
+    C_T = np.exp(np.random.uniform(size=(r, r)))
+
+    g_Q, g_R = np.full(r, 1 / r), np.full(r, 1 / r)  # Shape (r,) and (r,)
+
+    Q = ot.sinkhorn(a, g_Q, C_Q, reg_init, numItermax=10000)
+    R = ot.sinkhorn(b, g_R, C_R, reg_init, numItermax=10000)
+    T = ot.sinkhorn(
+        Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), C_T, reg_init, numItermax=10000
+    )
+
+    return Q, R, T
+
+
+
+
+def solve_balanced_FRLC_2(
+    C: np.array,
+    r: int,
+    a: np.array,
+    b: np.array,
+    tau: float,
+    gamma: float,
+    delta: float,
+    epsilon: float,
+    max_iter: int,
+) -> np.array:
+    """
+    Solves the low-rank balanced optimal transport problem using Factor Relaxation
+    with Latent Coupling (FRLC).
+
+    Parameters
+    ----------
+    C : np.array
+        Cost matrix of shape (n, m), where n and m are the number of source
+        and target points, respectively.
+    r : int
+        Rank constraint for the transport plan P.
+    a : np.array
+        Probability distribution vector of size n representing the source marginals.
+        Should sum to 1.
+    b : np.array
+        Probability distribution vector of size m representing the target marginals.
+        Should sum to 1.
+    tau : float
+        Regularization parameter controlling the relaxation of the inner marginals.
+    gamma : float
+        Step size (learning rate) for the coordinate mirror descent algorithm.
+    delta : float
+        Lower bound threshold for numerical stability in semi-relaxed projections.
+    epsilon : float
+        Stopping threshold for the mirror descent optimization.
+    max_iter : int
+        Maximum number of iterations for the mirror descent optimization.
+
+    Returns
+    -------
+    P : np.array
+        The computed low-rank optimal transport plan of shape (n, m).
+    """
+
+    n, m = C.shape
+    ones_n, ones_m = (
+        np.ones(n, dtype=float),
+        np.ones(m, dtype=float),
+    )  # Shape (n,) and (m,)
+    Q, R, T = initialize_couplings_2(a, b, r)  # Shape (n,r), (m,r), (r,r)
+    X = np.diag(1 / (Q.T @ ones_n)) @ T @ np.diag(1 / (R.T @ ones_m))  # Shape (r,r)
+    g_Q = Q.T @ ones_n
+    g_R = R.T @ ones_m
+    loss_list=[]
+    sign_of_convergence=0
+    print("#############")
+
+    for it in range(max_iter):
+        grad_Q = compute_gradient_Q(C, Q, R, X, g_Q)  # Shape (n,r)
+        grad_R = compute_gradient_R(C, Q, R, X, g_R)  # Shape (m,r)
+
+        gamma_k = gamma / max(
+            np.max(np.abs(grad_Q)), np.max(np.abs(grad_R))
+        )  # l-inf normalization
+
+        K_Q = Q * np.exp(-gamma_k*grad_Q)
+        K_R = R * np.exp(-gamma_k*grad_R)
+
+        Q_new = ot.sinkhorn_unbalanced(
+            a=a, b=g_Q, M=grad_Q, reg=1 / gamma_k, reg_m=[float("inf"), tau], c=Q
+        )
+
+        R_new = ot.sinkhorn_unbalanced(
+            a=b, b=g_R, M=grad_R, reg=1 / gamma_k, reg_m=[float("inf"), tau], c=R
+        )
+
+        '''
+        # ON A REMPLACE PAR CES 4 LIGNES : 
+        Q_sk = sinkhorn_knoop(K_Q, a, g_Q) # vérifier le bon ordre des marginales
+        R_sk = sinkhorn_knoop(K_R, b, g_R)  
+
+        print(K_Q.shape)
+        print(Q_sk[0].shape)
+        print(Q_sk[1].shape)
+
+        Q_new = Q_sk[0] * K_Q * Q_sk[1]
+        R_new = R_sk[0] * K_R * R_sk[1] # modifier la fonction sinkhorn_knoop pour qu'elle renvoit directement cela ? 
+        '''
+
+        g_Q = Q_new.T @ ones_n
+        g_R = R_new.T @ ones_m
+
+        grad_T = compute_gradient_T(Q_new, R_new, C, g_Q, g_R)  # Shape (r, r)
+
+        gamma_T = gamma / np.max(np.abs(grad_T))
+
+        T_new = ot.sinkhorn(g_R, g_Q, grad_T, reg=1 / gamma_T+delta)  # Shape (r, r)
+
+        X_new = np.diag(1 / g_Q) @ T_new @ np.diag(1 / g_R)  # Shape (r, r)
+
+        if compute_distance(Q_new, R_new, T_new, Q, R, T) < gamma_k * gamma_k * epsilon:
+            sign_of_convergence+=1
+        else:
+            sign_of_convergence=0
+        
+        if sign_of_convergence>=5:
+            return Q_new @ X_new @ R_new.T, loss_list  # Shape (n, m)
+
+        Q, R, T, X = Q_new, R_new, T_new, X_new
+        
+        loss = np.sum((Q_new @ X_new @ R_new.T) * C)
+        loss_list.append(loss)
+    
+    return Q_new @ X_new @ R_new.T, loss_list
+
+
+# https://github.com/raphael-group/FRLC/tree/main/src
+# https://meyerscetbon.github.io/files/poster_LOT_icml_2021.pdf
+# https://arxiv.org/pdf/1911.05371
+# https://www.cerfacs.fr/algor/reports/2006/TR_PA_06_42.pdf
+
+
+
+def sinkhorn_knoop(K, a, b, eps=1e-6, iter_max=1000):
+    """
+    Résout le problème de normalisation de la matrice K
+    pour trouver des vecteurs u et v tels que :
+    
+        diag(u) @ K @ diag(v) @ 1 = a  et  diag(v) @ K.T @ diag(u) @ 1 = b.
+    
+    Les entrées sont :
+      - K : matrice (m, n) (kernel défini par exemple comme Q * exp(-P/eps))
+      - a : vecteur de taille m ou None (contrainte sur les lignes)
+      - b : vecteur de taille n ou None (contrainte sur les colonnes)
+      - eps : seuil de tolérance pour la convergence
+      - iter_max : nombre maximum d’itérations autorisées
+    
+    Retourne :
+      - u : vecteur de mise à l’échelle pour les lignes
+      - v : vecteur de mise à l’échelle pour les colonnes
+    """
+    m, n = K.shape
+    tol = 1e-16  # petite constante pour éviter la division par zéro
+
+    u = np.ones(m)
+    v = np.ones(n)
+    
+    for it in range(iter_max):
+        v = b / (K.T.dot(u) + tol)
+        u = a / (K.dot(v) + tol)
+        # Calcul de l'erreur sur les marges
+        err_a = np.linalg.norm(u * (K.dot(v)) - a, 1)
+        err_b = np.linalg.norm(v * (K.T.dot(u)) - b, 1)
+        if err_a < eps and err_b < eps:
+            break
+    return np.diag(u), np.diag(v)
