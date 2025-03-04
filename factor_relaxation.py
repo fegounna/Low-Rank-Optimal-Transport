@@ -145,6 +145,9 @@ def solve_balanced_FRLC(
     g_Q = Q.T @ ones_n
     g_R = R.T @ ones_m
 
+    linear_loss_list = []
+    loss_list = []
+
     for it in range(max_iter):
         grad_Q = compute_gradient_Q(C, Q, R, X, g_Q)  # Shape (n,r)
         grad_R = compute_gradient_R(C, Q, R, X, g_R)  # Shape (m,r)
@@ -168,15 +171,19 @@ def solve_balanced_FRLC(
 
         gamma_T = gamma / np.max(np.abs(grad_T))
 
-        T_new = ot.sinkhorn_unbalanced(M=grad_T, a=g_R,b=g_Q,reg=1/gamma_T,c=T,reg_m=[float("inf"),float("inf")],stopThr=delta)  # Shape (r, r)
+        # T_new = sinkhorn(K=grad_T, a=g_)
+        T_new = ot.sinkhorn_unbalanced(M=grad_T, a=g_Q,b=g_R,reg=1/gamma_T,c=T,reg_m=[float("inf"),float("inf")],stopThr=delta)  # Shape (r, r)
 
         X_new = np.diag(1 / g_Q) @ T_new @ np.diag(1 / g_R)  # Shape (r, r)
 
         P = Q_new @ X_new @ R_new.T
 
-        print(np.sum(P * C))
-
         if compute_distance(Q_new, R_new, T_new, Q, R, T) < gamma_k * gamma_k * epsilon:
-            return Q_new @ X_new @ R_new.T  # Shape (n, m)
+            return Q_new, T_new, R_new.T, linear_loss_list, loss_list  # Shape (n, m)
+
+        linear_loss_list.append(np.sum((Q_new @ X_new @ R_new.T) * C))
+        loss_list.append(0)
 
         Q, R, T, X = Q_new, R_new, T_new, X_new
+    
+    return Q_new, T_new, R_new.T, linear_loss_list, loss_list
