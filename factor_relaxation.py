@@ -13,7 +13,7 @@ import ot
 
 
 def initialize_couplings(
-    a: np.array, b: np.array, r: int, reg_init=1e-1, seed=42
+    a: np.array, b: np.array, r: int, reg_init=1, seed=42
 ) -> tuple[np.array, np.array, np.array]:
     n = a.shape[0]
     m = b.shape[0]
@@ -25,10 +25,10 @@ def initialize_couplings(
 
     g_Q, g_R = np.full(r, 1 / r), np.full(r, 1 / r)  # Shape (r,) and (r,)
 
-    Q = ot.sinkhorn(a, g_Q, C_Q, reg_init, numItermax=10000)
-    R = ot.sinkhorn(b, g_R, C_R, reg_init, numItermax=10000)
+    Q = ot.sinkhorn(a, g_Q, C_Q, reg_init)
+    R = ot.sinkhorn(b, g_R, C_R, reg_init)
     T = ot.sinkhorn(
-        Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), C_T, reg_init, numItermax=10000
+        Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), C_T, reg_init
     )
 
     return Q, R, T
@@ -106,7 +106,9 @@ def solve_balanced_FRLC(
     with Latent Coupling (FRLC).
 
     Parameters
-    ----------
+    ---------- numItermax=10000
+ numItermax=10000
+ numItermax=10000
     C : np.array
         Cost matrix of shape (n, m), where n and m are the number of source
         and target points, respectively.
@@ -144,9 +146,6 @@ def solve_balanced_FRLC(
     X = np.diag(1 / (Q.T @ ones_n)) @ T @ np.diag(1 / (R.T @ ones_m))  # Shape (r,r)
     g_Q = Q.T @ ones_n
     g_R = R.T @ ones_m
-    loss_list=[]
-    sign_of_convergence=0
-    print("#############")
 
     for it in range(max_iter):
         grad_Q = compute_gradient_Q(C, Q, R, X, g_Q)  # Shape (n,r)
@@ -157,11 +156,11 @@ def solve_balanced_FRLC(
         )  # l-inf normalization
 
         Q_new = ot.sinkhorn_unbalanced(
-            a=a, b=g_Q, M=grad_Q, reg=1 / gamma_k, reg_m=[float("inf"), tau]
+            a=a, b=g_Q, M=grad_Q, reg=1 / gamma_k, c=Q, reg_m=[float("inf"), tau]
         )
 
         R_new = ot.sinkhorn_unbalanced(
-            a=b, b=g_R, M=grad_R, reg=1 / gamma_k, reg_m=[float("inf"), tau]
+            a=b, b=g_R, M=grad_R, reg=1 / gamma_k, c=R, reg_m=[float("inf"), tau]
         )
 
         g_Q = Q_new.T @ ones_n
@@ -171,21 +170,11 @@ def solve_balanced_FRLC(
 
         gamma_T = gamma / np.max(np.abs(grad_T))
 
-        T_new = ot.sinkhorn(g_R, g_Q, grad_T, reg=1 / gamma_T+delta)  # Shape (r, r)
+        T_new = ot.sinkhorn_unbalanced(M=grad_T, a=g_R,b=g_Q,reg=1/gamma_T,c=T,reg_m=[float("inf"),float("inf")])  # Shape (r, r)
 
         X_new = np.diag(1 / g_Q) @ T_new @ np.diag(1 / g_R)  # Shape (r, r)
 
         if compute_distance(Q_new, R_new, T_new, Q, R, T) < gamma_k * gamma_k * epsilon:
-            sign_of_convergence+=1
-        else:
-            sign_of_convergence=0
-        
-        if sign_of_convergence>=5:
-            return Q_new @ X_new @ R_new.T, loss_list  # Shape (n, m)
+            return Q_new @ X_new @ R_new.T  # Shape (n, m)
 
         Q, R, T, X = Q_new, R_new, T_new, X_new
-        
-        loss = np.sum((Q_new @ X_new @ R_new.T) * C)
-        loss_list.append(loss)
-    
-    return Q_new @ X_new @ R_new.T, loss_list
