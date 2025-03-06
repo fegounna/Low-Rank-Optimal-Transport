@@ -134,7 +134,54 @@ def solve_balanced_FRLC(
     P : np.array
         The computed low-rank optimal transport plan of shape (n, m).
     """
+    Q, diag_gq, T, diag_gr, R, _, _ = core_solve_balanced_FRLC(C, r, a, b, tau, gamma, delta, epsilon, max_iter)
+    return Q @ diag_gq @ T @ diag_gr @ R.T
 
+
+def core_solve_balanced_FRLC(
+    C: np.array,
+    r: int,
+    a: np.array,
+    b: np.array,
+    tau: float,
+    gamma: float,
+    delta: float,
+    epsilon: float,
+    max_iter: int,
+) -> np.array:
+    """
+    Solves the low-rank balanced optimal transport problem using Factor Relaxation
+    with Latent Coupling (FRLC).
+
+    Parameters
+    ---------- 
+    C : np.array
+        Cost matrix of shape (n, m), where n and m are the number of source
+        and target points, respectively.
+    r : int
+        Rank constraint for the transport plan P.
+    a : np.array
+        Probability distribution vector of size n representing the source marginals.
+        Should sum to 1.
+    b : np.array
+        Probability distribution vector of size m representing the target marginals.
+        Should sum to 1.
+    tau : float
+        Regularization parameter controlling the relaxation of the inner marginals.
+    gamma : float
+        Step size (learning rate) for the coordinate mirror descent algorithm.
+    delta : float
+        Lower bound threshold for numerical stability in semi-relaxed projections.
+    epsilon : float
+        Stopping threshold for the mirror descent optimization.
+    max_iter : int
+        Maximum number of iterations for the mirror descent optimization.
+
+    Returns
+    -------
+    P : np.array
+        The computed low-rank optimal transport plan of shape (n, m).
+    """
     n, m = C.shape
     ones_n, ones_m = (
         np.ones(n, dtype=float),
@@ -157,11 +204,11 @@ def solve_balanced_FRLC(
         )  # l-inf normalization
 
         Q_new = ot.sinkhorn_unbalanced(
-            a=a, b=g_Q, M=grad_Q, reg=1 / gamma_k, c=Q, reg_m=[float("inf"), tau]
+            a=a, b=g_Q, M=grad_Q, reg=1 / gamma_k, c=Q, reg_m=[float("inf"), tau],method="sinkhorn_stabilized"
         )
 
         R_new = ot.sinkhorn_unbalanced(
-            a=b, b=g_R, M=grad_R, reg=1 / gamma_k, c=R, reg_m=[float("inf"), tau]
+            a=b, b=g_R, M=grad_R, reg=1 / gamma_k, c=R, reg_m=[float("inf"), tau],method="sinkhorn_stabilized"
         )
 
         g_Q = Q_new.T @ ones_n
@@ -172,18 +219,24 @@ def solve_balanced_FRLC(
         gamma_T = gamma / np.max(np.abs(grad_T))
 
         # T_new = sinkhorn(K=grad_T, a=g_)
-        T_new = ot.sinkhorn_unbalanced(M=grad_T, a=g_Q,b=g_R,reg=1/gamma_T,c=T,reg_m=[float("inf"),float("inf")],stopThr=delta)  # Shape (r, r)
+        T_new = ot.sinkhorn_unbalanced(M=grad_T, a=g_Q,b=g_R,reg=1/gamma_T,c=T,reg_m=[float("inf"),float("inf")],stopThr=delta,method="sinkhorn_stabilized")  # Shape (r, r)
 
         X_new = np.diag(1 / g_Q) @ T_new @ np.diag(1 / g_R)  # Shape (r, r)
 
         P = Q_new @ X_new @ R_new.T
 
         if compute_distance(Q_new, R_new, T_new, Q, R, T) < gamma_k * gamma_k * epsilon:
-            return Q_new, T_new, R_new.T, linear_loss_list, loss_list  # Shape (n, m)
-
+            break
         linear_loss_list.append(np.sum((Q_new @ X_new @ R_new.T) * C))
         loss_list.append(0)
 
         Q, R, T, X = Q_new, R_new, T_new, X_new
     
-    return Q_new, T_new, R_new.T, linear_loss_list, loss_list
+    return Q_new, np.diag(1 / g_Q), T_new, np.diag(1 / g_R), R_new, linear_loss_list, loss_list  # Shape (n, m)
+
+
+def get_latent_coupling_points(Za, Zb, Q, diag_gq, R, diag_gr):
+    Ya = diag_gq @ Q.T @ Za
+    Yb = diag_gr @ R.T @ Zb
+    
+    return Ya, Yb
