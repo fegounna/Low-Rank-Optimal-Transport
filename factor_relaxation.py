@@ -25,10 +25,10 @@ def initialize_couplings(
 
     g_Q, g_R = np.full(r, 1 / r), np.full(r, 1 / r)  # Shape (r,) and (r,)
 
-    Q = ot.sinkhorn(a, g_Q, C_Q, reg_init)
-    R = ot.sinkhorn(b, g_R, C_R, reg_init)
+    Q = ot.sinkhorn(a, g_Q, np.exp(C_Q), reg_init)
+    R = ot.sinkhorn(b, g_R, np.exp(C_R), reg_init)
     T = ot.sinkhorn(
-        Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), C_T, reg_init
+        Q.T @ np.ones(n, dtype=float), R.T @ np.ones(m, dtype=float), np.exp(C_T), reg_init
     )
 
     return Q, R, T
